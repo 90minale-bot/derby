@@ -20,8 +20,8 @@ st.set_page_config(
 st.title("🏇 Derby Win Probability + Value Model")
 
 st.markdown("""
-Upload or edit your Derby horse data, then rank the field by model score,
-estimated win probability, implied odds probability, and value edge.
+Upload or edit your Derby horse data, adjust the model weights, then rank the field by
+model score, estimated win probability, implied odds probability, and value edge.
 """)
 
 
@@ -123,6 +123,20 @@ def clean_input_df(df):
     return df
 
 
+def rerank(df, sort_col="model_score"):
+    df = df.copy()
+
+    if sort_col in df.columns:
+        df = df.sort_values(sort_col, ascending=False).reset_index(drop=True)
+
+    df["rank"] = range(1, len(df) + 1)
+
+    return df
+
+
+# -----------------------------
+# Sidebar data
+# -----------------------------
 st.sidebar.header("Data")
 
 uploaded_file = st.sidebar.file_uploader(
@@ -144,6 +158,9 @@ else:
     df_input = load_data()
 
 
+# -----------------------------
+# Sidebar model weights
+# -----------------------------
 st.sidebar.markdown("---")
 st.sidebar.header("Model Weights")
 
@@ -176,6 +193,9 @@ weights = {k: v / weight_total for k, v in raw_weights.items()}
 st.sidebar.caption(f"Normalized total weight: {sum(weights.values()):.2f}")
 
 
+# -----------------------------
+# Input data editor
+# -----------------------------
 st.subheader("1️⃣ Horse Input Data")
 
 st.markdown("""
@@ -189,7 +209,8 @@ edited_df = st.data_editor(
     df_input,
     use_container_width=True,
     num_rows="dynamic",
-    height=350
+    height=350,
+    key="horse_editor"
 )
 
 col_save, col_reload, col_reset = st.columns([1, 1, 1])
@@ -210,14 +231,22 @@ with col_reset:
         st.rerun()
 
 
+# -----------------------------
+# Run model every rerun
+# -----------------------------
 ranked = calculate_derby_scores(edited_df, weights=weights)
 ranked = add_bet_labels(ranked)
+ranked = rerank(ranked, "model_score")
 
 
+# -----------------------------
+# Metrics
+# -----------------------------
 st.divider()
 st.subheader("2️⃣ Model Summary")
 
 top = ranked.iloc[0]
+best_value = ranked.sort_values("value_edge_pct", ascending=False).iloc[0]
 
 col1, col2, col3, col4 = st.columns(4)
 
@@ -231,11 +260,37 @@ with col3:
     st.metric("Top Win Probability", f"{top.get('win_probability_pct', 0):.1f}%")
 
 with col4:
-    st.metric("Best Value Edge", f"{ranked['value_edge_pct'].max():.1f}%")
+    st.metric("Best Value Horse", best_value.get("horse", "N/A"))
 
 
+# -----------------------------
+# Results table
+# -----------------------------
 st.divider()
 st.subheader("3️⃣ Ranked Derby Results")
+
+sort_options = [
+    "model_score",
+    "win_probability_pct",
+    "value_edge_pct",
+    "speed_score",
+    "form_score",
+    "pace_score",
+    "stamina_score",
+    "post_score",
+    "trainer_jockey_score",
+    "odds_value_score",
+]
+
+sort_options = [c for c in sort_options if c in ranked.columns]
+
+sort_choice = st.selectbox(
+    "Sort results by",
+    sort_options,
+    index=0
+)
+
+ranked_display = rerank(ranked, sort_choice)
 
 display_cols = [
     "rank",
@@ -258,48 +313,55 @@ display_cols = [
     "jockey",
 ]
 
-existing_cols = [c for c in display_cols if c in ranked.columns]
+existing_cols = [c for c in display_cols if c in ranked_display.columns]
 
 st.dataframe(
-    ranked[existing_cols],
+    ranked_display[existing_cols],
     use_container_width=True,
     height=550
 )
 
 
+# -----------------------------
+# Charts
+# -----------------------------
 st.divider()
 st.subheader("4️⃣ Visuals")
 
-chart_df = ranked.copy()
+chart_df = ranked_display.copy()
 
 if "horse" in chart_df.columns:
     fig_score = px.bar(
-        chart_df.sort_values("model_score", ascending=True),
-        x="model_score",
+        chart_df.sort_values(sort_choice, ascending=True),
+        x=sort_choice,
         y="horse",
         orientation="h",
-        title="Model Score by Horse",
-        text="model_score",
+        title=f"{sort_choice} by Horse",
+        text=sort_choice,
     )
 
     st.plotly_chart(fig_score, use_container_width=True)
 
-    fig_value = px.bar(
-        chart_df.sort_values("value_edge_pct", ascending=True),
-        x="value_edge_pct",
-        y="horse",
-        orientation="h",
-        title="Value Edge: Model Win Probability minus Implied Odds Probability",
-        text="value_edge_pct",
-    )
+    if "value_edge_pct" in chart_df.columns:
+        fig_value = px.bar(
+            chart_df.sort_values("value_edge_pct", ascending=True),
+            x="value_edge_pct",
+            y="horse",
+            orientation="h",
+            title="Value Edge: Model Win Probability minus Implied Odds Probability",
+            text="value_edge_pct",
+        )
 
-    st.plotly_chart(fig_value, use_container_width=True)
+        st.plotly_chart(fig_value, use_container_width=True)
 
 
+# -----------------------------
+# Export
+# -----------------------------
 st.divider()
 st.subheader("5️⃣ Export Results")
 
-csv = ranked.to_csv(index=False).encode("utf-8")
+csv = ranked_display.to_csv(index=False).encode("utf-8")
 
 st.download_button(
     label="⬇️ Download Ranked Derby Results",
@@ -322,6 +384,12 @@ The model creates a weighted score for each horse using:
 - Post position
 - Trainer / jockey
 - Odds value
+
+### Weight sliders
+
+When you move the weight sliders, the model recalculates automatically.
+
+The app normalizes the weights so they always add up to 1.00.
 
 ### Win Probability
 
